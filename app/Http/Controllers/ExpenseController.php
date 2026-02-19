@@ -3,9 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Models\Expense;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
-use Carbon\Carbon;
 
 class ExpenseController extends Controller
 {
@@ -15,27 +15,27 @@ class ExpenseController extends Controller
     public function index(Request $request)
     {
         $query = Expense::with('creator');
-        
+
         if ($request->has('search')) {
             $query->search($request->search);
         }
-        
+
         if ($request->has('category')) {
             $query->byCategory($request->category);
         }
-        
+
         if ($request->has('payment_status')) {
             $query->where('payment_status', $request->payment_status);
         }
-        
+
         if ($request->has('date_from')) {
             $query->where('expense_date', '>=', $request->date_from);
         }
-        
+
         if ($request->has('date_to')) {
             $query->where('expense_date', '<=', $request->date_to);
         }
-        
+
         if ($request->has('period')) {
             switch ($request->period) {
                 case 'today':
@@ -49,14 +49,14 @@ class ExpenseController extends Controller
                     break;
             }
         }
-        
+
         $sortBy = $request->get('sort_by', 'expense_date');
         $sortOrder = $request->get('sort_order', 'desc');
-        $query->orderBy($sortBy, $sortOrder);
-        
-        $perPage = $request->get('per_page', 15);
-        $expenses = $query->paginate($perPage);
-        
+
+        $expenses = $query
+            ->orderBy($sortBy, $sortOrder)
+            ->paginate($request->get('per_page', 15));
+
         return response()->json([
             'success' => true,
             'data' => $expenses
@@ -69,17 +69,17 @@ class ExpenseController extends Controller
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'description' => 'required|string|max:255',
-            'category' => 'required|string|max:100',
-            'amount_usd' => 'nullable|numeric|min:0',
-            'amount_pen' => 'nullable|numeric|min:0',
-            'exchange_rate' => 'nullable|numeric|min:0',
-            'payment_method' => 'required|string|in:efectivo,tarjeta,transferencia,cheque',
-            'payment_status' => 'nullable|string|in:paid,pending',
-            'supplier' => 'nullable|string|max:255',
-            'invoice_number' => 'nullable|string|max:100',
-            'expense_date' => 'required|date',
-            'notes' => 'nullable|string',
+            'description'     => 'required|string|max:255',
+            'category'        => 'required|string|max:100',
+            'amount_usd'      => 'nullable|numeric|min:0',
+            'amount_pen'      => 'nullable|numeric|min:0',
+            'exchange_rate'   => 'nullable|numeric|min:0',
+            'payment_method'  => 'required|in:efectivo,tarjeta,transferencia,cheque',
+            'payment_status'  => 'nullable|in:paid,pending',
+            'supplier'        => 'nullable|string|max:255',
+            'invoice_number'  => 'nullable|string|max:100',
+            'expense_date'    => 'required|date',
+            'notes'           => 'nullable|string',
         ]);
 
         if ($validator->fails()) {
@@ -89,7 +89,7 @@ class ExpenseController extends Controller
             ], 422);
         }
 
-        // Validar que al menos un monto esté presente
+        // Debe existir al menos un monto
         if (!$request->amount_usd && !$request->amount_pen) {
             return response()->json([
                 'success' => false,
@@ -97,9 +97,10 @@ class ExpenseController extends Controller
             ], 422);
         }
 
+        // Crear gasto (created_by seguro aunque no haya login)
         $expense = Expense::create(array_merge(
-            $request->all(),
-            ['created_by' => auth()->id()]
+            $validator->validated(),
+            ['created_by' => auth()->id() ?? null]
         ));
 
         return response()->json([
@@ -115,7 +116,7 @@ class ExpenseController extends Controller
     public function show($id)
     {
         $expense = Expense::with('creator')->findOrFail($id);
-        
+
         return response()->json([
             'success' => true,
             'data' => $expense
@@ -128,13 +129,13 @@ class ExpenseController extends Controller
     public function update(Request $request, $id)
     {
         $expense = Expense::findOrFail($id);
-        
+
         $validator = Validator::make($request->all(), [
-            'description' => 'sometimes|required|string|max:255',
-            'category' => 'sometimes|required|string|max:100',
-            'amount_usd' => 'nullable|numeric|min:0',
-            'amount_pen' => 'nullable|numeric|min:0',
-            'payment_status' => 'nullable|string|in:paid,pending',
+            'description'    => 'sometimes|required|string|max:255',
+            'category'       => 'sometimes|required|string|max:100',
+            'amount_usd'     => 'nullable|numeric|min:0',
+            'amount_pen'     => 'nullable|numeric|min:0',
+            'payment_status' => 'nullable|in:paid,pending',
         ]);
 
         if ($validator->fails()) {
@@ -144,7 +145,7 @@ class ExpenseController extends Controller
             ], 422);
         }
 
-        $expense->update($request->all());
+        $expense->update($validator->validated());
 
         return response()->json([
             'success' => true,
@@ -168,14 +169,13 @@ class ExpenseController extends Controller
     }
 
     /**
-     * Obtener resumen de gastos
+     * Resumen de gastos
      */
     public function summary(Request $request)
     {
         $period = $request->get('period', 'this_month');
-        
         $query = Expense::query();
-        
+
         switch ($period) {
             case 'today':
                 $query->today();
@@ -187,55 +187,47 @@ class ExpenseController extends Controller
                 $query->thisYear();
                 break;
         }
-        
+
         $expenses = $query->get();
-        
-        $summary = [
-            'total' => $expenses->sum('amount_pen'),
-            'paid' => $expenses->where('payment_status', 'paid')->sum('amount_pen'),
-            'pending' => $expenses->where('payment_status', 'pending')->sum('amount_pen'),
-            'by_category' => $expenses->groupBy('category')->map(function($group) {
-                return [
-                    'count' => $group->count(),
-                    'total' => $group->sum('amount_pen'),
-                ];
-            }),
-            'by_payment_method' => $expenses->groupBy('payment_method')->map(function($group) {
-                return [
-                    'count' => $group->count(),
-                    'total' => $group->sum('amount_pen'),
-                ];
-            }),
-        ];
-        
+
         return response()->json([
             'success' => true,
             'period' => $period,
-            'data' => $summary
+            'data' => [
+                'total' => $expenses->sum('amount_pen'),
+                'paid' => $expenses->where('payment_status', 'paid')->sum('amount_pen'),
+                'pending' => $expenses->where('payment_status', 'pending')->sum('amount_pen'),
+                'by_category' => $expenses->groupBy('category')->map(fn ($g) => [
+                    'count' => $g->count(),
+                    'total' => $g->sum('amount_pen'),
+                ]),
+                'by_payment_method' => $expenses->groupBy('payment_method')->map(fn ($g) => [
+                    'count' => $g->count(),
+                    'total' => $g->sum('amount_pen'),
+                ]),
+            ]
         ]);
     }
 
     /**
-     * Obtener categorías de gastos más comunes
+     * Categorías de gastos
      */
     public function categories()
     {
-        $categories = [
-            'compra_inventario' => 'Compra de Inventario',
-            'operativo' => 'Gastos Operativos',
-            'salarios' => 'Salarios',
-            'servicios' => 'Servicios (Luz, Agua, Internet)',
-            'impuestos' => 'Impuestos',
-            'alquiler' => 'Alquiler',
-            'marketing' => 'Marketing y Publicidad',
-            'mantenimiento' => 'Mantenimiento',
-            'transporte' => 'Transporte',
-            'otros' => 'Otros',
-        ];
-        
         return response()->json([
             'success' => true,
-            'data' => $categories
+            'data' => [
+                'compra_inventario' => 'Compra de Inventario',
+                'operativo' => 'Gastos Operativos',
+                'salarios' => 'Salarios',
+                'servicios' => 'Servicios (Luz, Agua, Internet)',
+                'impuestos' => 'Impuestos',
+                'alquiler' => 'Alquiler',
+                'marketing' => 'Marketing y Publicidad',
+                'mantenimiento' => 'Mantenimiento',
+                'transporte' => 'Transporte',
+                'otros' => 'Otros',
+            ]
         ]);
     }
 }

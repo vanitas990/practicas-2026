@@ -9,6 +9,8 @@ use App\Http\Controllers\ServiceController;
 use App\Http\Controllers\ExpenseController;
 use App\Http\Controllers\ExchangeRateController;
 use App\Http\Controllers\ReportController;
+use App\Http\Controllers\VehicleController;
+
 
 /*
 |--------------------------------------------------------------------------
@@ -95,6 +97,11 @@ Route::prefix('reports')->group(function () {
     Route::get('/dashboard', [ReportController::class, 'dashboard']);
     Route::get('/financial', [ReportController::class, 'financial']);
     Route::get('/inventory', [ReportController::class, 'inventory']);
+});
+Route::prefix('vehicles')->group(function () {
+    Route::get('/', [VehicleController::class, 'index']);
+    Route::post('/', [VehicleController::class, 'store']);
+    Route::get('/{id}', [VehicleController::class, 'show']);
 });
 
 // }); // Fin del grupo protegido
